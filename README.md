@@ -54,6 +54,7 @@ This project is suitable for:
 Interactive-TCP-Chat-Server-Multi-Client/
 ├── serv.py        # TCP chat server (Teacher side)
 ├── client.py      # GUI-based chat client (Student side)
+├── master_gui.py  # GUI-based chat server (Teacher side)
 ├── README.md      # Project documentation
 └── .gitignore
 ```
