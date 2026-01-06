@@ -1,70 +1,89 @@
 #!/usr/bin/env python3
-# Ubuntu Networking Lab Server v2.0 - Module 5.2
 import socket, threading, os
 from datetime import datetime
-from colorama import init, Fore, Style
-init()
 
-class UbuntuLabServer:
+class TeacherPanel:
     def __init__(self):
-        self.clients = []
-        self.stats = {'connections': 0, 'messages': 0}
+        self.clients = {}  # {id: (socket, addr, name)}
+        self.next_id = 1
     
-    def log(self, msg, color=Fore.WHITE):
+    def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
-        print(f'[{ts}]{color} UbuntuLab |{Style.RESET_ALL} {msg}')
+        print(f'[{ts}] 🎓 TEACHER | {msg}')
     
-    def banner(self):
+    def dashboard(self):
         os.system('clear')
-        ip = socket.gethostbyname(socket.gethostname())
-        print(Fore.GREEN + f'''
-╔══════════════════════════════════════════════════════╗
-║  🐍 PYTHON MODULE 5.2 NETWORKING LAB SERVER v2.0    ║
-║  Ubuntu Server • Multi-Client • Real-time Chat      ║
-╠══════════════════════════════════════════════════════╣
-║  📶 SERVER IP: {ip:<15} PORT: 8080                 ║
-║  👥 MAX CLIENTS: 50  📊 STATS: {self.stats}         ║
-╚══════════════════════════════════════════════════════╝
-        ''' + Style.RESET_ALL)
+        print('🎯 TEACHER CONTROL PANEL v3.0')
+        print('='*60)
+        if not self.clients:
+            print('👥 No students connected')
+        else:
+            print(f'📊 {len(self.clients)} students online')
+            for sid, (sock, addr, name) in self.clients.items():
+                status = '🟢' if sock else '🔴'
+                print(f'{sid:2}: {name:<12} | {addr[0]:15} | {status}')
+        print('='*60)
+        print('Commands: r5=reply#5, a=all, q=quit')
     
-    def start(self):
-        self.banner()
+    def reply_private(self, sid, msg):
+        if sid in self.clients:
+            sock = self.clients[sid][0]
+            try:
+                sock.send(f'💬 PRIVATE Teacher: {msg}'.encode())
+                self.log(f'✅ Replied to #{sid} "{self.clients[sid][2]}"')
+            except: self.log(f'❌ #{sid} offline')
+    
+    def broadcast(self, msg):
+        for sid, (sock, _, _) in list(self.clients.items()):
+            try:
+                sock.send(f'📢 ALL: {msg}'.encode())
+            except: pass
+        self.log(f'📢 Sent to {len(self.clients)} students')
+    
+    def handle_student(self, sock, addr):
+        sid = self.next_id; self.next_id += 1
+        sock.send(b'Name: ')
+        name = sock.recv(50).decode().strip() or f'Student{sid}'
+        self.clients[sid] = (sock, addr, name)
+        self.log(f'🔗 #{sid} "{name}" from {addr[0]}')
+        
+        while sid in self.clients:
+            try:
+                msg = sock.recv(1024).decode(errors='ignore')
+                if msg: 
+                    self.log(f'📨 #{sid} "{name}": {msg.strip()}')
+            except: break
+        sock.close()
+        self.clients.pop(sid, None)
+    
+    def run(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(('0.0.0.0', 8080))
         s.listen(50)
+        ip = socket.gethostbyname(socket.gethostname())
         
-        self.log('🚀 LIVE! 0.0.0.0:8080 - Waiting for students...', Fore.GREEN)
-        self.log(f'🌐 Connect: telnet {socket.gethostbyname(socket.gethostname())} 8080', Fore.YELLOW)
+        self.log(f'SERVER LIVE: {ip}:8080')
+        self.log('Students: telnet IP 8080')
+        
+        def accept_loop():
+            while True:
+                c, a = s.accept()
+                t = threading.Thread(target=self.handle_student, args=(c, a))
+                t.daemon = True; t.start()
+        
+        import threading
+        threading.Thread(target=accept_loop, daemon=True).start()
         
         while True:
-            c, addr = s.accept()
-            self.clients.append(c)
-            self.stats['connections'] += 1
-            self.log(f'🔗 C#{len(self.clients)}: {addr[0]}:{addr[1]} ✅', Fore.BLUE)
-            t = threading.Thread(target=self.handle_client, args=(c, addr))
-            t.daemon = True
-            t.start()
+            self.dashboard()
+            cmd = input('🎯 ').strip().lower()
+            if cmd == 'q': 
+                self.broadcast('🛑 Lab complete!'); break
+            elif cmd == 'a':
+                self.broadcast(input('📢 Message: '))
+            elif cmd.startswith('r') and cmd[1:].isdigit():
+                sid = int(cmd[1:])
+                self.reply_private(sid, input(f'💬 To #{sid}: '))
     
-    def handle_client(self, c, addr):
-        cid = len(self.clients)
-        while True:
-            try:
-                data = c.recv(1024).decode(errors='ignore')
-                if not data: break
-                self.stats['messages'] += 1
-                self.log(f'📨 C#{cid}({addr[0]}): {data[:40]}{"..."if len(data)>40 else""}', Fore.YELLOW)
-                reply = input(f'💬 C#{cid}: ')
-                if reply.lower() in ['quit','shutdown']:
-                    return os._exit(0)
-                if reply.startswith('/all '):
-                    for x in self.clients:
-                        if x!=c: x.send(f'BROADCAST: {reply[4:]}\n'.encode())
-                else:
-                    c.send(reply.encode())
-            except: break
-        c.close()
-        if c in self.clients: self.clients.remove(c)
-        self.log(f'🔌 C#{cid} DISCONNECTED', Fore.RED)
-
-if __name__=='__main__': UbuntuLabServer().start()
+TeacherPanel().run()
