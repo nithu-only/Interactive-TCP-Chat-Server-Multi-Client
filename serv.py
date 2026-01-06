@@ -1,129 +1,98 @@
 #!/usr/bin/env python3
-# Teacher Panel v3.1 - TELNET UTF8 FIXED
+# Teacher Panel v4.0 - HISTORY + No Clear Screen
 import socket, threading, os
 from datetime import datetime
 
-class TeacherPanel:
+class TeacherPanelV4:
     def __init__(self):
         self.clients = {}
         self.next_id = 1
+        self.history = []
     
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
-        print(f'[{ts}] 🎓 TEACHER | {msg}')
-    
-    def safe_recv(self, sock):
-        """Safe receive - ignores telnet garbage"""
-        try:
-            data = sock.recv(1024)
-            if not data: return None
-            # Ignore non-text bytes, extract printable text
-            text = ''.join(c for c in data.decode('utf-8', errors='ignore') if ord(c) > 31 and ord(c) < 127)
-            return text.strip() if text else None
-        except:
-            return None
+        line = f'[{ts}] {msg}'
+        self.history.append(line)
+        print(line)
     
     def dashboard(self):
-        os.system('clear')
-        print('🎯 TEACHER PANEL v3.1 - 50 Student Capacity')
-        print('=' * 60)
-        if not self.clients:
-            print('👥 No students connected')
-        else:
-            print(f'📊 {len(self.clients)} students online')
+        print('\\n' + '='*70)
+        print('🎯 TEACHER v4.0 | Students:', len([c for c in self.clients if self.clients[c]['alive']]))
+        if self.clients:
             for sid in sorted(self.clients):
-                info = self.clients[sid]
-                status = '🟢' if info['alive'] else '🔴'
-                print(f'{sid:2d}: {info["name"][:10]:<10} | {info["ip"]:<15} | {status}')
-        print('=' * 60)
-        print('Commands: r5=reply #5, a=all broadcast, q=quit')
+                if self.clients[sid]['alive']:
+                    info = self.clients[sid]
+                    print(f'  #{sid}: {info["name"]} ({info["ip"]}) 🟢')
+        print('='*70)
+        print('r5=reply#5, a=all, h=history, q=quit')
     
-    def send_msg(self, sock, msg):
+    def safe_recv(self, sock):
         try:
-            sock.send((msg + '\n').encode('ascii', errors='ignore'))
+            data = sock.recv(1024)
+            if not data: return ''
+            return ''.join([c for c in data.decode('utf-8', errors='ignore') if 32<=ord(c)<=126]).strip()
+        except: return ''
+    
+    def send(self, sock, msg):
+        try: sock.send(f'{msg}\\n'.encode('ascii', errors='ignore'))
         except: pass
     
     def handle_student(self, sock, addr):
-        sid = self.next_id
-        self.next_id += 1
-        ip = addr[0]
-        name = f'Student{sid}'  # Auto-name, NO input = NO UTF8 error
-        
-        self.clients[sid] = {
-            'sock': sock, 'ip': ip, 'name': name, 'alive': True, 'count': 0
-        }
-        self.send_msg(sock, f'✅ Connected as {name}! Send messages to teacher.')
-        self.log(f'🔗 #{sid} "{name}" ({ip}) ✅')
+        sid = self.next_id; self.next_id += 1
+        name = f'Student{sid}'
+        self.clients[sid] = {'sock': sock, 'addr': addr, 'name': name, 'alive': True}
+        self.send(sock, f'✅ Welcome {name}!')
+        self.log(f'🔗 #{sid} {name} ({addr[0]})')
         
         while sid in self.clients and self.clients[sid]['alive']:
             msg = self.safe_recv(sock)
             if msg:
-                self.clients[sid]['count'] += 1
-                self.log(f'📨 #{sid}({name}): {msg[:50]}')
-            else:
-                break
+                self.log(f'📨 #{sid}({name}): {msg}')
+            else: break
         
         self.clients[sid]['alive'] = False
-        try: sock.close()
-        except: pass
-        self.log(f'👋 #{sid}({name}) disconnected')
+        sock.close()
+        self.log(f'👋 #{sid} left')
         self.clients.pop(sid, None)
     
-    def reply_student(self, sid, msg):
+    def reply(self, sid, msg):
         if sid in self.clients and self.clients[sid]['alive']:
-            self.send_msg(self.clients[sid]['sock'], f'💬 Teacher: {msg}')
-            self.log(f'✅ Replied #{sid}')
-            return True
-        self.log(f'❌ #{sid} offline')
-        return False
+            self.send(self.clients[sid]['sock'], f'💬 Teacher: {msg}')
+            self.log(f'✅ →#{sid}: {msg}')
     
-    def broadcast_all(self, msg):
+    def broadcast(self, msg):
         count = 0
-        for sid in list(self.clients):
+        for sid in self.clients:
             if self.clients[sid]['alive']:
-                self.send_msg(self.clients[sid]['sock'], f'📢 Teacher Broadcast: {msg}')
+                self.send(self.clients[sid]['sock'], f'📢 ALL: {msg}')
                 count += 1
-        self.log(f'📢 Broadcast to {count} students')
+        self.log(f'📢 Broadcast {count} students')
+    
+    def show_history(self):
+        print('\\n📜 LAST MESSAGES:')
+        print('-'*40)
+        for line in self.history[-8:]:
+            print(line)
     
     def run(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(('0.0.0.0', 8080))
         s.listen(50)
+        ip = socket.gethostbyname(socket.gethostname())
         
-        try:
-            ip = socket.gethostbyname(socket.gethostname())
-        except:
-            ip = '0.0.0.0'
-            
-        self.log(f'🚀 LIVE: {ip}:8080')
-        self.log('📡 Students connect: telnet YOUR_IP 8080')
+        self.log(f'🚀 v4.0 LIVE {ip}:8080')
         
-        # Background client acceptor
-        def accept_loop():
-            while True:
-                c, a = s.accept()
-                t = threading.Thread(target=self.handle_student, args=(c, a))
-                t.daemon = True
-                t.start()
+        threading.Thread(target=lambda: [self.handle_student(*s.accept()) or time.sleep(0.1) for _ in iter(int,1)], daemon=True).start()
         
-        threading.Thread(target=accept_loop, daemon=True).start()
-        
-        # Teacher commands
         while True:
             self.dashboard()
-            cmd = input('\n🎯 Command: ').strip().lower()
-            
-            if cmd == 'q':
-                self.broadcast_all('🛑 Lab complete - Goodbye everyone!')
-                break
-            elif cmd == 'a':
-                self.broadcast_all(input('📢 Message to ALL: '))
+            cmd = input('\\n🎯 ').lower()
+            if cmd=='q': self.broadcast('Lab end!'); break
+            elif cmd=='h': self.show_history()
+            elif cmd=='a': self.broadcast(input('📢 '))
             elif cmd.startswith('r') and cmd[1:].isdigit():
-                sid = int(cmd[1:])
-                self.reply_student(sid, input(f'💬 To Student #{sid}: '))
-            else:
-                print('❓ Type: r5 (reply student 5), a (all), q (quit)')
+                sid=int(cmd[1:])
+                self.reply(sid, input(f'#{sid}: '))
     
-if __name__ == '__main__':
-    TeacherPanel().run()
+TeacherPanelV4().run()
