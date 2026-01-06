@@ -13,122 +13,114 @@ class TeacherPanelV4:
         line = f'[{ts}] {msg}'
         self.history.append(line)
         print(line)
+
+    def save_logs(self):
+        filename = f"lab_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(filename, "w") as f:
+            f.write("\n".join(self.history))
+        print(f"\n📂 Logs saved to {filename}")
     
     def dashboard(self):
-        # Use a real newline \n instead of \\n
         print('\n' + '='*70)
-        active_count = len([c for c in self.clients if self.clients[c]['alive']])
-        print(f'🎯 TEACHER v4.0 | Students: {active_count}')
+        active_clients = [c for c in self.clients if self.clients[c]['alive']]
+        print(f'🎯 TEACHER v4.1 | Students Online: {len(active_clients)}')
         
-        if self.clients:
+        if active_clients:
             for sid in sorted(self.clients):
                 if self.clients[sid]['alive']:
                     info = self.clients[sid]
-                    # FIXED: Changed ["ip"] to ["addr"][0]
                     print(f'  #{sid}: {info["name"]} ({info["addr"][0]}) 🟢')
         print('='*70)
-        print('r5=reply#5, a=all, h=history, q=quit')
+        print('r5=reply#5, k5=kick#5, a=all, h=history, q=quit')
     
     def safe_recv(self, sock):
         try:
             data = sock.recv(1024)
-            if not data: return ''
-            # Decode and strip unwanted whitespace/null bytes
+            if not data: return None
             msg = data.decode('utf-8', errors='ignore').strip()
             return ''.join([c for c in msg if 32<=ord(c)<=126])
-        except: return ''
+        except: return None
     
     def send(self, sock, msg):
-        try: 
-            # Added \r\n for better compatibility with different terminals
-            sock.send(f'{msg}\r\n'.encode('ascii', errors='ignore'))
+        try: sock.send(f'{msg}\r\n'.encode('ascii', errors='ignore'))
         except: pass
     
     def handle_student(self, sock, addr):
         sid = self.next_id
         self.next_id += 1
-        name = f'Student{sid}'
-        self.clients[sid] = {'sock': sock, 'addr': addr, 'name': name, 'alive': True}
         
-        self.send(sock, f'✅ Welcome {name}!')
-        self.log(f'🔗 #{sid} {name} ({addr[0]})')
+        # --- NAME REGISTRATION STEP ---
+        self.send(sock, "📝 Enter your Full Name to join:")
+        student_name = self.safe_recv(sock)
+        if not student_name: student_name = f"Unknown_{sid}"
+        
+        self.clients[sid] = {'sock': sock, 'addr': addr, 'name': student_name, 'alive': True}
+        self.send(sock, f'✅ Welcome {student_name}! You are Student #{sid}')
+        self.log(f'🔗 #{sid} {student_name} joined from {addr[0]}')
         
         while sid in self.clients and self.clients[sid]['alive']:
             msg = self.safe_recv(sock)
-            if msg:
-                self.log(f'📨 #{sid}({name}): {msg}')
-            elif msg == '': # This helps detect clean disconnects
+            if msg is not None and msg != '':
+                self.log(f'📨 #{sid}({student_name}): {msg}')
+            elif msg is None: # Connection lost
                 break
         
-        self.clients[sid]['alive'] = False
-        sock.close()
-        self.log(f'👋 #{sid} left')
-        self.clients.pop(sid, None)
-    
+        if sid in self.clients:
+            self.clients[sid]['alive'] = False
+            sock.close()
+            self.log(f'👋 #{sid} ({student_name}) left')
+            self.clients.pop(sid, None)
+
+    def kick(self, sid):
+        if sid in self.clients:
+            self.send(self.clients[sid]['sock'], "🚫 You have been removed from the session.")
+            self.clients[sid]['alive'] = False
+            self.clients[sid]['sock'].close()
+            self.log(f'⚠️ Kicked #{sid}')
+
     def reply(self, sid, msg):
         if sid in self.clients and self.clients[sid]['alive']:
             self.send(self.clients[sid]['sock'], f'💬 Teacher: {msg}')
-            self.log(f'✅ →#{sid}: {msg}')
+            self.log(f'✅ →#{sid}({self.clients[sid]["name"]}): {msg}')
     
     def broadcast(self, msg):
-        count = 0
         for sid in list(self.clients.keys()):
             if self.clients[sid]['alive']:
                 self.send(self.clients[sid]['sock'], f'📢 ALL: {msg}')
-                count += 1
-        self.log(f'📢 Broadcast to {count} students')
-    
-    def show_history(self):
-        print('\n📜 LAST MESSAGES:')
-        print('-'*40)
-        for line in self.history[-8:]:
-            print(line)
+        self.log(f'📢 Broadcast: {msg}')
     
     def run(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind(('0.0.0.0', 8080))
-        except OSError as e:
-            print(f"❌ Could not bind to port 8080: {e}")
-            return
-            
+        s.bind(('0.0.0.0', 8080))
         s.listen(50)
-        # Getting local IP more reliably
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
+        self.log(f'🚀 v4.1 LIVE on port 8080')
         
-        self.log(f'🚀 v4.0 LIVE on {local_ip}:8080')
-        
-        # Cleaner thread management
         def accept_loop():
             while True:
                 try:
-                    client_sock, client_addr = s.accept()
-                    threading.Thread(target=self.handle_student, args=(client_sock, client_addr), daemon=True).start()
-                except:
-                    break
+                    c, a = s.accept()
+                    threading.Thread(target=self.handle_student, args=(c, a), daemon=True).start()
+                except: break
 
         threading.Thread(target=accept_loop, daemon=True).start()
         
         while True:
             self.dashboard()
-            try:
-                cmd = input('\n🎯 ').lower().strip()
-                if cmd == 'q': 
-                    self.broadcast('Lab end!')
-                    break
-                elif cmd == 'h': 
-                    self.show_history()
-                elif cmd == 'a': 
-                    msg = input('📢 Message to all: ')
-                    self.broadcast(msg)
-                elif cmd.startswith('r') and cmd[1:].isdigit():
-                    sid = int(cmd[1:])
-                    msg = input(f'Reply to #{sid}: ')
-                    self.reply(sid, msg)
-            except KeyboardInterrupt:
+            cmd = input('\n🎯 ').lower().strip()
+            if cmd == 'q': 
+                self.broadcast('Lab session ended.')
+                self.save_logs()
                 break
+            elif cmd == 'h': 
+                print('\n'.join(self.history[-10:]))
+            elif cmd == 'a': 
+                self.broadcast(input('📢 Message: '))
+            elif cmd.startswith('r') and cmd[1:].isdigit():
+                sid = int(cmd[1:])
+                self.reply(sid, input(f'Reply to {self.clients[sid]["name"]}: '))
+            elif cmd.startswith('k') and cmd[1:].isdigit():
+                self.kick(int(cmd[1:]))
 
 if __name__ == "__main__":
     TeacherPanelV4().run()
